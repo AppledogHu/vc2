@@ -1,0 +1,1043 @@
+// SD-8510 CPU / VC-2 Computer System
+// Copyright (C) 2025 Appledog Hu
+//
+// SPDX-License-Identifier: GPL-2.0-only WITH SD-8510-runtime-exception
+// See LICENSE file for details.
+//
+
+0 .address $0100
+
+10 LDT 0
+20 LDA 0
+
+// ========================================
+// CATEGORY: LD/ST 8-BIT (0-49) ✓ IMPLEMENTED
+// ========================================
+
+// === TEST 1: LDA immediate ===
+100 test_1:
+110 LDT 1
+120 LDA 42
+130 CMP A, 42
+140 JNZ @fail
+
+// === TEST 2: LDB immediate ===
+150 test_2:
+160 LDT 2
+170 LDB 99
+180 CMP B, 99
+190 JNZ @fail
+
+// === TEST 3: LDX immediate ===
+200 test_3:
+210 LDT 3
+220 LDX 128
+230 CMP X, 128
+240 JNZ @fail
+
+// === TEST 4: LDY immediate ===
+250 test_4:
+260 LDT 4
+270 LDY 255
+280 CMP Y, 255
+290 JNZ @fail
+
+// === TEST 5: LDI immediate ===
+300 test_5:
+310 LDT 5
+320 LDI 50
+330 CMP I, 50
+340 JNZ @fail
+
+// === TEST 6: LDJ immediate ===
+350 test_6:
+360 LDT 6
+370 LDJ 60
+380 CMP J, 60
+390 JNZ @fail
+
+// === TEST 7: LDK immediate ===
+400 test_7:
+410 LDT 7
+420 LDK 70
+430 CMP K, 70
+440 JNZ @fail
+
+// === TEST 8: LDS immediate ===
+450 test_8:
+460 LDT 8
+470 LDS 0xFE
+480 CMP S, 0xFE
+490 JNZ @fail
+
+// === TEST 9: LDF immediate ===
+500 test_9:
+510 LDT 9
+520 LDF 0x82
+530 CMP F, 0x82
+540 JNZ @fail
+
+// === TEST 10: STA/LDB absolute ===
+550 test_10:
+560 LDT 10
+570 LDA 123
+580 STA [$D500]
+590 LDB [$D500]
+600 CMP B, 123
+610 JNZ @fail
+
+// === TEST 11: STX/LDY zero page ===
+620 test_11:
+630 LDT 11
+640 LDX 77
+650 STX [$50]
+660 LDY [$50]
+670 CMP Y, 77
+680 JNZ @fail
+
+// === TEST 12: STI/LDJ absolute ===
+690 test_12:
+700 LDT 12
+710 LDI 88
+720 STI [$D510]
+730 LDJ [$D510]
+740 CMP J, 88
+750 JNZ @fail
+
+// === TEST 13: STK/LDA zero page ===
+760 test_13:
+770 LDT 13
+780 LDK 99
+790 STK [$60]
+800 LDA [$60]
+810 CMP A, 99
+820 JNZ @fail
+
+// === TEST 14: Memory chain ===
+830 test_14:
+840 LDT 14
+850 LDA 111
+860 STA [$D520]
+870 LDB [$D520]
+880 STB [$D530]
+890 LDX [$D530]
+900 CMP X, 111
+910 JNZ @fail
+
+// ========================================
+// CATEGORY: IMPLICIT ARITHMETIC (50-59) ✓ IMPLEMENTED
+// ========================================
+
+// === TEST 15: ADD ===
+1000 test_15:
+1010 LDT 15
+1020 LDA 10
+1030 LDB 15
+1040 ADD
+1050 CMP A, 25
+1060 JNZ @fail
+
+// === TEST 16: SUB ===
+1070 test_16:
+1080 LDT 16
+1090 LDA 50
+1100 LDB 30
+1110 SUB
+1120 CMP A, 20
+1130 JNZ @fail
+
+// === TEST 17: MUL ===
+1140 test_17:
+1150 LDT 17
+1160 LDA 12
+1170 LDB 5
+1180 MUL
+1190 CMP A, 0
+1200 JNZ @fail
+1210 CMP B, 60
+1220 JNZ @fail
+
+// === TEST 18: DIV ===
+1230 test_18:
+1240 LDT 18
+1250 LDA 47
+1260 LDB 5
+1270 DIV
+1280 CMP A, 9
+1290 JNZ @fail
+1300 CMP B, 2
+1310 JNZ @fail
+
+// === TEST 19: MOD ===
+1320 test_19:
+1330 LDT 19
+1340 LDA 47
+1350 LDB 5
+1360 MOD
+1370 CMP A, 2
+1380 JNZ @fail
+
+// === TEST 20: ADDX ===
+1390 test_20:
+1400 LDT 20
+1410 LDA 0x34
+1420 LDB 0x12
+1430 LDX 0x78
+1440 LDY 0x56
+1450 ADDX
+1460 CMP A, 0xAC
+1470 JNZ @fail
+1480 CMP B, 0x68
+1490 JNZ @fail
+
+// === TEST 21: SUBX ===
+1500 test_21:
+1510 LDT 21
+1520 LDA 0x00
+1530 LDB 0x10
+1540 LDX 0x50
+1550 LDY 0x00
+1560 SUBX
+1570 CMP A, 0xB0
+1580 JNZ @fail
+1590 CMP B, 0x0F
+1600 JNZ @fail
+
+// === TEST 22: MULX ===
+1610 test_22:
+1620 LDT 22
+1630 LDA 0x88
+1640 LDB 0x13
+1650 LDX 0x88
+1660 LDY 0x13
+1670 MULX
+1680 CMP A, 0x40
+1690 JNZ @fail
+1700 CMP B, 0x78
+1710 JNZ @fail
+1720 CMP X, 0x7D
+1730 JNZ @fail
+1740 CMP Y, 0x01
+1750 JNZ @fail
+
+// === TEST 23: DIVX ===
+1760 test_23:
+1770 LDT 23
+1780 LDA 0xE8
+1790 LDB 0x03
+1800 LDX 0x0A
+1810 LDY 0x00
+1820 DIVX
+1830 CMP A, 0x64
+1840 JNZ @fail
+1850 CMP B, 0x00
+1860 JNZ @fail
+
+// === TEST 24: MODX ===
+1870 test_24:
+1880 LDT 24
+1890 LDA 0xE9
+1900 LDB 0x03
+1910 LDX 0x0A
+1920 LDY 0x00
+1930 MODX
+1940 CMP A, 0x01
+1950 JNZ @fail
+1960 CMP B, 0x00
+1970 JNZ @fail
+
+// ========================================
+// CATEGORY: EXPLICIT ARITHMETIC (60-74) ✗ UNIMPLEMENTED
+// ========================================
+
+// === TEST 25: ADD reg, imm ===
+2000 test_25:
+2010 LDT 25
+2020 LDA 10
+2030 ADD A, 5
+2040 CMP A, 15
+2050 JNZ @fail
+
+// === TEST 26: ADD reg, mem ===
+2060 test_26:
+2070 LDT 26
+2080 LDA 20
+2090 STA [$D600]
+2100 LDA 10
+2110 ADD A, [$D600]
+2120 CMP A, 30
+2130 JNZ @fail
+
+// === TEST 27: ADD reg, reg ===
+2140 test_27:
+2150 LDT 27
+2160 LDA 5
+2170 LDB 7
+2180 ADD A, B
+2190 CMP A, 12
+2200 JNZ @fail
+
+// === TEST 28: SUB reg, imm ===
+2210 test_28:
+2220 LDT 28
+2230 LDA 20
+2240 SUB A, 8
+2250 CMP A, 12
+2260 JNZ @fail
+
+// === TEST 29: SUB reg, mem ===
+2270 test_29:
+2280 LDT 29
+2290 LDA 5
+2300 STA [$D610]
+2310 LDA 15
+2320 SUB A, [$D610]
+2330 CMP A, 10
+2340 JNZ @fail
+
+// === TEST 30: SUB reg, reg ===
+2350 test_30:
+2360 LDT 30
+2370 LDA 50
+2380 LDB 30
+2390 SUB A, B
+2400 CMP A, 20
+2410 JNZ @fail
+
+// === TEST 31: MUL reg, imm ===
+2420 test_31:
+2430 LDT 31
+2440 LDA 7
+2450 MUL A, 6
+2460 CMP A, 42
+2470 JNZ @fail
+
+// === TEST 32: MUL reg, mem ===
+2480 test_32:
+2490 LDT 32
+2500 LDA 5
+2510 STA [$D620]
+2520 LDA 9
+2530 MUL A, [$D620]
+2540 CMP A, 45
+2550 JNZ @fail
+
+// === TEST 33: MUL reg, reg ===
+2560 test_33:
+2570 LDT 33
+2580 LDA 8
+2590 LDB 4
+2600 MUL A, B
+2610 CMP A, 32
+2620 JNZ @fail
+
+// === TEST 34: DIV reg, imm ===
+2630 test_34:
+2640 LDT 34
+2650 LDA 50
+2660 DIV A, 5
+2670 CMP A, 10
+2680 JNZ @fail
+
+// === TEST 35: DIV reg, mem ===
+2690 test_35:
+2700 LDT 35
+2710 LDA 7
+2720 STA [$D630]
+2730 LDA 49
+2740 DIV A, [$D630]
+2750 CMP A, 7
+2760 JNZ @fail
+
+// === TEST 36: DIV reg, reg ===
+2770 test_36:
+2780 LDT 36
+2790 LDA 36
+2800 LDB 6
+2810 DIV A, B
+2820 CMP A, 6
+2830 JNZ @fail
+
+// === TEST 37: MOD reg, imm ===
+2840 test_37:
+2850 LDT 37
+2860 LDA 47
+2870 MOD A, 5
+2880 CMP A, 2
+2890 JNZ @fail
+
+// === TEST 38: MOD reg, mem ===
+2900 test_38:
+2910 LDT 38
+2920 LDA 9
+2930 STA [$D640]
+2940 LDA 50
+2950 MOD A, [$D640]
+2960 CMP A, 5
+2970 JNZ @fail
+
+// === TEST 39: MOD reg, reg ===
+2980 test_39:
+2990 LDT 39
+3000 LDA 23
+3010 LDB 7
+3020 MOD A, B
+3030 CMP A, 2
+3040 JNZ @fail
+
+// ========================================
+// CATEGORY: INC/DEC (75-98, 228-235) ✓ IMPLEMENTED
+// ========================================
+
+// === TEST 40: INC A ===
+3100 test_40:
+3110 LDT 40
+3120 LDA 99
+3130 INC A
+3140 CMP A, 100
+3150 JNZ @fail
+
+// === TEST 41: INC B ===
+3160 test_41:
+3170 LDT 41
+3180 LDB 50
+3190 INC B
+3200 CMP B, 51
+3210 JNZ @fail
+
+// === TEST 42: DEC A ===
+3220 test_42:
+3230 LDT 42
+3240 LDA 100
+3250 DEC A
+3260 CMP A, 99
+3270 JNZ @fail
+
+// === TEST 43: INC AB (16-bit) ===
+3280 test_43:
+3290 LDT 43
+3300 LDA 0xFF
+3310 LDB 0x00
+3320 INC AB
+3330 CMP A, 0x00
+3340 JNZ @fail
+3350 CMP B, 0x01
+3360 JNZ @fail
+
+// === TEST 44: DEC AB (16-bit) ===
+3370 test_44:
+3380 LDT 44
+3390 LDA 0x00
+3400 LDB 0x01
+3410 DEC AB
+3420 CMP A, 0xFF
+3430 JNZ @fail
+3440 CMP B, 0x00
+3450 JNZ @fail
+
+// === TEST 45: INC/DEC pointers ===
+3460 test_45:
+3470 LDT 45
+3480 INC MP
+3490 INC DP
+3500 INC EP
+3510 INC SP
+3520 DEC MP
+3530 DEC DP
+3540 DEC EP
+3550 DEC SP
+
+// ========================================
+// CATEGORY: IMPLICIT LOGIC (99-102) ✓ IMPLEMENTED
+// ========================================
+
+// === TEST 46: AND ===
+4000 test_46:
+4010 LDT 46
+4020 LDA 255
+4030 LDB 15
+4040 AND
+4050 CMP A, 15
+4060 JNZ @fail
+
+// === TEST 47: OR ===
+4070 test_47:
+4080 LDT 47
+4090 LDA 240
+4100 LDB 15
+4110 OR
+4120 CMP A, 255
+4130 JNZ @fail
+
+// === TEST 48: XOR ===
+4140 test_48:
+4150 LDT 48
+4160 LDA 170
+4170 LDB 85
+4180 XOR
+4190 CMP A, 255
+4200 JNZ @fail
+
+// === TEST 49: NOT ===
+4210 test_49:
+4220 LDT 49
+4230 LDA 0
+4240 NOT
+4250 CMP A, 255
+4260 JNZ @fail
+
+// ========================================
+// CATEGORY: EXPLICIT LOGIC (103-109) ✗ UNIMPLEMENTED
+// ========================================
+
+// === TEST 50: AND reg, imm ===
+4300 test_50:
+4310 LDT 50
+4320 LDA 0xFF
+4330 AND A, 0x0F
+4340 CMP A, 0x0F
+4350 JNZ @fail
+
+// === TEST 51: AND reg, reg ===
+4360 test_51:
+4370 LDT 51
+4380 LDA 0xF0
+4390 LDB 0x0F
+4400 AND A, B
+4410 CMP A, 0x00
+4420 JNZ @fail
+
+// === TEST 52: OR reg, imm ===
+4430 test_52:
+4440 LDT 52
+4450 LDA 0xF0
+4460 OR A, 0x0F
+4470 CMP A, 0xFF
+4480 JNZ @fail
+
+// === TEST 53: OR reg, reg ===
+4490 test_53:
+4500 LDT 53
+4510 LDA 0xF0
+4520 LDB 0x0F
+4530 OR A, B
+4540 CMP A, 0xFF
+4550 JNZ @fail
+
+// === TEST 54: XOR reg, imm ===
+4560 test_54:
+4570 LDT 54
+4580 LDA 0xAA
+4590 XOR A, 0x55
+4600 CMP A, 0xFF
+4610 JNZ @fail
+
+// === TEST 55: XOR reg, reg ===
+4620 test_55:
+4630 LDT 55
+4640 LDA 0xAA
+4650 LDB 0x55
+4660 XOR A, B
+4670 CMP A, 0xFF
+4680 JNZ @fail
+
+// === TEST 56: NOT reg ===
+4690 test_56:
+4700 LDT 56
+4710 LDA 0x00
+4720 NOT A
+4730 CMP A, 0xFF
+4740 JNZ @fail
+
+// ========================================
+// CATEGORY: SHIFTS/ROTATES (110-115) ✗ UNIMPLEMENTED
+// ========================================
+
+// === TEST 57: SHL ===
+4800 test_57:
+4810 LDT 57
+4820 LDA 0x80
+4830 SHL A
+4840 CMP A, 0x00
+4850 JNZ @fail
+
+// === TEST 58: SHR ===
+4860 test_58:
+4870 LDT 58
+4880 LDA 0x03
+4890 SHR A
+4900 CMP A, 0x01
+4910 JNZ @fail
+
+// === TEST 59: ROL ===
+4920 test_59:
+4930 LDT 59
+4940 CLC
+4950 LDA 0x80
+4960 ROL A
+4970 CMP A, 0x00
+4980 JNZ @fail
+4990 LDA 0x40
+4995 SEC
+5000 ROL A
+5010 CMP A, 0x81
+5020 JNZ @fail
+
+// === TEST 60: ROR ===
+5030 test_60:
+5040 LDT 60
+5050 CLC
+5060 LDA 0x01
+5070 ROR A
+5080 CMP A, 0x00
+5090 JNZ @fail
+5100 LDA 0x02
+5105 SEC
+5110 ROR A
+5120 CMP A, 0x81
+5130 JNZ @fail
+
+// === TEST 61: ROTL ===
+5140 test_61:
+5150 LDT 61
+5160 LDA 0x80
+5170 ROTL A
+5180 CMP A, 0x01
+5190 JNZ @fail
+
+// === TEST 62: ROTR ===
+5200 test_62:
+5210 LDT 62
+5220 LDA 0x01
+5230 ROTR A
+5240 CMP A, 0x80
+5250 JNZ @fail
+
+// ========================================
+// CATEGORY: 16-BIT LOGIC (116-120, 179-184) ✓ IMPLEMENTED
+// ========================================
+
+// === TEST 63: ANDX ===
+5300 test_63:
+5310 LDT 63
+5320 LDA 0x34
+5330 LDB 0x12
+5340 LDX 0xFF
+5350 LDY 0x00
+5360 ANDX
+5370 CMP A, 0x34
+5380 JNZ @fail
+5390 CMP B, 0x00
+5400 JNZ @fail
+
+// === TEST 64: ORX ===
+5410 test_64:
+5420 LDT 64
+5430 LDA 0x0F
+5440 LDB 0x00
+5450 LDX 0xF0
+5460 LDY 0xFF
+5470 ORX
+5480 CMP A, 0xFF
+5490 JNZ @fail
+5500 CMP B, 0xFF
+5510 JNZ @fail
+
+// === TEST 65: XORX ===
+5520 test_65:
+5530 LDT 65
+5540 LDA 0xAA
+5550 LDB 0xAA
+5560 LDX 0x55
+5570 LDY 0x55
+5580 XORX
+5590 CMP A, 0xFF
+5600 JNZ @fail
+5610 CMP B, 0xFF
+5620 JNZ @fail
+
+// === TEST 66: NOTX ===
+5630 test_66:
+5640 LDT 66
+5650 LDA 0x00
+5660 LDB 0x00
+5670 NOTX
+5680 CMP A, 0xFF
+5690 JNZ @fail
+5700 CMP B, 0xFF
+5710 JNZ @fail
+
+// ========================================
+// CATEGORY: COMPARISON (121-129) ✓ IMPLEMENTED
+// ========================================
+
+// === TEST 67: CMP (implicit) ===
+5800 test_67:
+5810 LDT 67
+5820 LDA 10
+5830 LDB 10
+5840 CMP
+5850 JNZ @fail
+
+// === TEST 68: CMP reg, imm ===
+5860 test_68:
+5870 LDT 68
+5880 LDA 10
+5890 CMP A, 10
+5900 JNZ @fail
+
+// === TEST 69: CMP reg, mem ===
+5910 test_69:
+5920 LDT 69
+5930 LDA 20
+5940 STA [$D700]
+5950 CMP A, [$D700]
+5960 JNZ @fail
+
+// === TEST 70: CMP reg, reg ===
+5970 test_70:
+5980 LDT 70
+5990 LDA 10
+6000 LDB 10
+6010 CMP A, B
+6020 JNZ @fail
+
+// === TEST 71: CMPX (16-bit) ===
+6030 test_71:
+6040 LDT 71
+6050 LDA 0x34
+6060 LDB 0x12
+6070 LDX 0x34
+6080 LDY 0x12
+6090 CMPX
+6100 JNZ @fail
+
+// ========================================
+// CATEGORY: JUMPS - RELATIVE (130-138) ✗ UNIMPLEMENTED
+// ========================================
+
+// === TEST 72: BRJ ===
+6200 test_72:
+6210 LDT 72
+6220 BRJ 4
+6230 HALT
+6240 HALT
+
+// ========================================
+// CATEGORY: JUMPS - ABSOLUTE (139-150) ✓ IMPLEMENTED
+// ========================================
+
+// === TEST 73: JMP/JZ/JNZ ===
+6300 test_73:
+6310 LDT 73
+6320 JMP @jmp_target_73
+6330 HALT
+6340 jmp_target_73:
+6350 LDA 0
+6360 CMP A, 0
+6370 JZ @jz_target_73
+6380 HALT
+6390 jz_target_73:
+6400 LDA 1
+6410 JNZ @jnz_target_73
+6420 HALT
+6430 jnz_target_73:
+6440 SEC
+6450 JC @jc_target_73
+6460 HALT
+6470 jc_target_73:
+6480 CLC
+6490 JNC @after_jumps_73
+6500 HALT
+6510 after_jumps_73:
+
+// ========================================
+// CATEGORY: SUBROUTINES (151-155) ✗ UNIMPLEMENTED
+// ========================================
+
+// === TEST 74: CALL/RET ===
+6600 test_74:
+6610 LDT 74
+6620 LDA 0
+6630 CALL @test_sub_74
+6640 CMP A, 42
+6650 JNZ @fail
+6660 JMP @after_sub_74
+6670 test_sub_74:
+6680 LDA 42
+6690 RET
+6700 after_sub_74:
+
+// ========================================
+// CATEGORY: STACK (156-161, 236-237) ✓ IMPLEMENTED
+// ========================================
+
+// === TEST 75: PUSH/POP reg ===
+6800 test_75:
+6810 LDT 75
+6820 LDA 123
+6830 PUSH A
+6840 LDA 0
+6850 POP A
+6860 CMP A, 123
+6870 JNZ @fail
+
+// === TEST 76: PUSH imm ===
+6880 test_76:
+6890 LDT 76
+6900 PUSH 99
+6910 POP B
+6920 CMP B, 99
+6930 JNZ @fail
+
+// === TEST 77: PUSH mem ===
+6940 test_77:
+6950 LDT 77
+6960 LDA 55
+6970 STA [$D800]
+6980 PUSH [$D800]
+6990 POP X
+7000 CMP X, 55
+7010 JNZ @fail
+
+// === TEST 78: POP mem ===
+7020 test_78:
+7030 LDT 78
+7040 LDA 77
+7050 PUSH A
+7060 POP [$D810]
+7070 LDB [$D810]
+7080 CMP B, 77
+7090 JNZ @fail
+
+// === TEST 79: PUSHL/POPL (16-bit) ===
+7100 test_79:
+7110 LDT 79
+7120 LDA 0x34
+7130 LDB 0x12
+7140 PUSHL AB
+7150 LDA 0
+7160 LDB 0
+7170 POPL AB
+7180 CMP A, 0x34
+7190 JNZ @fail
+7200 CMP B, 0x12
+7210 JNZ @fail
+
+// ========================================
+// CATEGORY: CPU OPS (162-168) ✓ PUSHA/POPA implemented
+// ========================================
+
+// === TEST 80: PUSHA/POPA ===
+7300 test_80:
+7310 LDT 80
+7320 LDA 1
+7330 LDB 2
+7340 LDX 3
+7350 LDY 4
+7360 LDI 5
+7370 LDJ 6
+7380 LDK 7
+7390 PUSHA
+7400 LDA 0
+7410 LDB 0
+7420 LDX 0
+7430 LDY 0
+7440 LDI 0
+7450 LDJ 0
+7460 LDK 0
+7470 POPA
+7480 CMP A, 1
+7490 JNZ @fail
+7500 CMP B, 2
+7510 JNZ @fail
+7520 CMP X, 3
+7530 JNZ @fail
+7540 CMP Y, 4
+7550 JNZ @fail
+7560 CMP I, 5
+7570 JNZ @fail
+7580 CMP J, 6
+7590 JNZ @fail
+7600 CMP K, 7
+7610 JNZ @fail
+
+// === TEST 81: CLI/SEI ===
+7620 test_81:
+7630 LDT 81
+7640 CLI
+7650 SEI
+
+// ========================================
+// CATEGORY: BANK OPERATIONS (169-178) ✗ UNIMPLEMENTED
+// ========================================
+
+// === TEST 82: SETMB/GETMB ===
+7700 test_82:
+7710 LDT 82
+7720 LDA 5
+7730 LDB 0
+7740 SETMB
+7750 LDA 0
+7760 LDB 0
+7770 GETMB
+7780 CMP A, 5
+7790 JNZ @fail
+7800 CMP B, 0
+7810 JNZ @fail
+
+// === TEST 83: SETDB/GETDB ===
+//7820 test_83:
+//7830 LDT 83
+//7840 LDA 3
+//7850 LDB 0
+//7860 SETDB
+//7870 LDA 0
+//7880 LDB 0
+//7890 GETDB
+//7900 CMP A, 3
+//7910 JNZ @fail
+
+// === TEST 84: Other bank ops ===
+//7920 test_84:
+//7930 LDT 84
+//7940 LDA 1
+//7950 LDB 0
+//7960 SETCB    // warning, do not set CB.
+//7970 SETEB
+//7980 SETSB
+
+// ========================================
+// CATEGORY: FLAG OPERATIONS (189-196) ✗ UNIMPLEMENTED
+// ========================================
+
+// === TEST 85: Flag operations ===
+8000 test_85:
+8010 LDT 85
+8020 CLC
+8030 SEC
+8040 CLV
+8050 SEV
+8060 CLZ
+8070 SEZ
+8080 CLN
+8090 SEN
+
+// ========================================
+// CATEGORY: MOV OPERATIONS (203-215) ✗ UNIMPLEMENTED
+// ========================================
+
+// === TEST 86: MOV reg, reg ===
+8200 test_86:
+8210 LDT 86
+8220 LDA 0x34
+8230 LDB 0x12
+8240 MOV XY, AB
+8250 CMP X, 0x34
+8260 JNZ @fail
+8270 CMP Y, 0x12
+8280 JNZ @fail
+
+// === TEST 87: MOV reg, imm ===
+8290 test_87:
+8300 LDT 87
+8310 MOV AB, 0x5678
+8320 CMP A, 0x78
+8330 JNZ @fail
+8340 CMP B, 0x56
+8350 JNZ @fail
+
+// === TEST 88: MOV mem, reg / MOV reg, mem ===
+8360 test_88:
+8370 LDT 88
+8380 MOV AB, 0x1234
+8390 MOV [$D900], AB
+8400 MOV XY, [$D900]
+8410 CMP X, 0x34
+8420 JNZ @fail
+8430 CMP Y, 0x12
+8440 JNZ @fail
+
+// === TEST 89: MOV [reg], reg / MOV reg, [reg] ===
+8450 test_89:
+8460 LDT 89
+8470 MOV MP, 0xD910
+8480 MOV AB, 0xABCD
+8490 MOV [MP], AB
+8500 MOV XY, [MP]
+8510 CMP X, 0xCD
+8520 JNZ @fail
+8530 CMP Y, 0xAB
+8540 JNZ @fail
+
+// ========================================
+// CATEGORY: BLOCK OPERATIONS (216-220) ✗ UNIMPLEMENTED
+// ========================================
+
+// === TEST 90: MEMCOPY ===
+8600 test_90:
+8610 LDT 90
+8620 LDA 0x55
+8630 STA [$DA00]
+8640 LDA 0xAA
+8650 STA [$DA01]
+8660 LDA 0xFF
+8670 STA [$DA02]
+8680 MOV MP, $DA00
+8690 MOV DP, $DB00
+8700 MOV KT, $0003
+8710 MEMCOPY
+8720 LDA [$DA00]
+8730 CMP A, 0x55
+8740 JNZ @fail
+8750 LDA [$DA01]
+8760 CMP A, 0xAA
+8770 JNZ @fail
+8780 LDA [$DA02]
+8790 CMP A, 0xFF
+8800 JNZ @fail
+
+// === TEST 91: SCAN ===
+8840 test_91:
+8850 LDT 91
+8860 LDA 0x42
+8870 STA [$DC05]
+8880 LDX 0x00
+8890 LDY 0xDC
+8900 LDK 10
+8910 LDT 0
+8920 SCAN
+8930 CMP X, 0x05
+8940 JNZ @fail
+8950 CMP Y, 0xDC
+8960 JNZ @fail
+
+// ========================================
+// CATEGORY: NOP/HALT (254-255) ✓ IMPLEMENTED
+// ========================================
+
+// === TEST 92: NOP ===
+9000 test_92:
+9010 LDT 92
+9020 LDA 42
+9030 NOP
+9040 NOP
+9050 NOP
+9060 CMP A, 42
+9070 JNZ @fail
+
+// ========================================
+// ALL TESTS PASSED
+// ========================================
+
+9100 all_tests_pass:
+9110 LDT 255
+9120 LDA 0
+9130 HALT
+
+// ========================================
+// FAIL HANDLER
+// ========================================
+
+9200 fail:
+9210 HALT

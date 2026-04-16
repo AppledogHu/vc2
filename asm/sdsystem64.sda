@@ -1,0 +1,2137 @@
+// SD-8510 CPU / VC-2 Computer System
+// Copyright (C) 2025 Appledog Hu
+//
+// SPDX-License-Identifier: GPL-2.0-only WITH SD-8510-runtime-exception
+// See LICENSE file for details.
+//
+
+; Stellar Dynamics KERNAL ROM V2
+; (C) 2025 Neo Hu
+; Authors: Neo, Appledog
+;
+
+.address $E000
+    CALL @bootmsg
+
+    LDA 0
+    MOV DP, $F0FC
+    STA [DP]    ; set cursor X to 0.
+
+    LDA 7
+    MOV DP, $F0FD
+    STA [DP]    ; set cursor Y to 8.
+
+    ;; set default cursor colors
+    LDA $B5
+    MOV DP, $F0F8
+    STA [DP]
+
+    LDA $5B
+    MOV DP, $F0F9
+    STA [DP]
+
+main_loop:
+    CALL @cursor_blink    ; do flashing cursor
+
+    ; Check if ESC pressed (for exit)
+    ; Read keyboard buffer count at $F0FB
+    MOV DP, $F0FB
+    LDB [DP]
+    CMP B, 0
+    JZ @main_loop       ; No key, loop again
+
+    ; Get first character from buffer at $F0A0
+    MOV DP, $F0A0
+    LDA [DP]
+    PUSH A              ; Save character
+
+
+    ; Get control flags from buffer at $F0A1
+    MOV DP, $F0A1
+    LDA [DP]
+    PUSH A
+    POP I           ; control flags now in I.
+    ; Now, if we need them, the keyboard flags are stored in I.
+
+    POP A       ; restore character
+    PUSH A      ; save it on stack for later
+
+    ; Check if ESC (27)
+    CMP A, 27
+    JZ @do_halt
+
+    ; Decrement buffer count
+    MOV DP, $F0FB
+    LDB [DP]
+    DEC B
+    STB [DP]
+
+    ; Shift buffer left (copy $F0A2 onwards to $F0A0)
+    MOV MP, $F0A2
+    MOV DP, $F0A0
+    MOV KT, 14
+    MEMCOPY
+
+    ; Clear the last 2 bytes (the freed pair at the end)
+    LDA 0
+    MOV DP, $F0AE
+    STA [DP]
+    INC DP
+    STA [DP]
+
+    ; Get character back
+    POP A
+    PUSH A              ; Keep it on stack
+
+    ; Read cursor position
+    MOV DP, $F0FC
+    LDA [DP]            ; A = X (column)
+    PUSH A              ; Save X
+    MOV DP, $F0FD
+    LDA [DP]            ; A = Y (row)
+    PUSH A              ; Save Y
+    POP Y
+    POP X
+    POP A
+
+    ; proc special chars here
+    CMP A, $08  ; backspace
+    JZ @main_backspace
+    CMP A, $7F  ; DEL
+    JZ @main_del
+
+    ; Check for arrow keys (128-131)
+    CMP A, 128
+    JZ @main_larr
+    CMP A, 129
+    JZ @main_darr
+    CMP A, 130
+    JZ @main_uarr
+    CMP A, 131
+    JZ @main_rarr
+
+    CMP A, #13       ; enter
+    JZ @main_enter_key
+
+; If it fell through to here, we will treat it as printable.
+main_write:
+    CALL @cursor_off
+    CALL @write_char
+    CALL @arr_right
+    JMP @main_loop
+
+do_halt:
+    HALT
+
+main_backspace:
+    CALL @cursor_off
+    CALL @do_backspace
+    JMP @main_loop
+
+main_del:
+    CALL @cursor_off
+    CALL @pull_line
+    JMP @main_loop
+
+main_larr:
+    CALL @cursor_off
+    CALL @arr_left
+    JMP @main_loop
+
+main_darr:
+    CALL @cursor_off
+    CALL @arr_down
+    JMP @main_loop
+
+main_uarr:
+    CALL @cursor_off
+    CALL @arr_up
+    JMP @main_loop
+
+main_rarr:
+    CALL @cursor_off
+    CALL @arr_right
+    JMP @main_loop
+
+main_enter_key:
+    CALL @cursor_off
+
+    ; Check if in input mode
+    MOV DP, @input_mode_active
+    LDA [DP]
+    CMP A, 0
+    JZ @normal_enter_key
+
+    ; Input mode - copy line to buffer and exit input mode
+    CALL @copy_input_to_buffer
+    LDA 0
+    STA [DP]            ; Clear input_mode_active
+    CALL @carriage_return
+    CALL @line_feed
+    JMP @main_loop
+
+normal_enter_key:
+    ; Normal mode - parse command
+    CALL @parse_line    ; handles line_feeding.
+    JMP @main_loop
+
+;;;;;
+bootmsg:
+    PUSHA
+
+    LDX 0
+    LDY 1
+    CALL @ctoxy
+
+    MOV AB, @bootmsg1
+    CALL @write_string
+
+    LDX 0
+    LDY 3
+    CALL @ctoxy
+
+    MOV AB, @bootmsg2
+    CALL @write_string
+
+    MOV AB, @bootmsg3
+    CALL @write_string
+
+    LDX 0
+    LDY 6
+    CALL @ctoxy
+
+    MOV AB, @bootmsg4
+    CALL @write_string
+
+    POPA
+    RET
+
+    ; Message data (each row null-terminated)
+    bootmsg1:
+        .bytes "  ** SD-System 64 **  ", 0
+    bootmsg2:
+        .bytes "ROM/OS V2.0           ", 0
+    bootmsg3:
+        .bytes "57,344 BYTES FREE     ", 0
+    bootmsg4:
+        .bytes "READY.                ", 0
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+invert_saved_cursor:
+    ; Routine: Invert color and store
+    ;   Takes color in format BBBBFFFF and swaps to FFFFBBBB
+
+    PUSHA
+
+    ; Read default color
+    MOV DP, $F0F8
+    LDA [DP]            ; A = BBBBFFFF
+
+    ; Swap nibbles
+    UAB                 ; B = BBBB, A = 0000FFFF
+    PUSH A              ; Save fg
+    PUSH B              ; Save bg
+    POP A               ; A = 0000BBBB
+    POP B               ; B = 0000FFFF
+    PAB                 ; A = FFFFBBBB (swapped!)
+
+    ; Store inverted color
+    MOV DP, $F0F9
+    STA [DP]
+
+    POPA
+    RET
+
+helpmsg:
+    PUSH AB
+    CALL @getcursor
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsg1
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsg2
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsg3
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsg4
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsg5
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsg6
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsg7
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsg8
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsg9
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsgA
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsgB
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @helpmsgC
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+
+    CALL @carriage_return
+    CALL @line_feed
+
+    POP AB
+    RET
+
+    ; Message data (each row null-terminated)
+    helpmsg1:
+        .bytes "SD ROM/OS V2 Commands:", 0
+    helpmsg2:
+        .bytes "HELP - THIS LIST", 0
+    helpmsg3:
+        .bytes "HALT - STOP CPU", 0
+    helpmsg4:
+        .bytes "FG # - CHAR COLOR", 0
+    helpmsg5:
+        .bytes "BG # - SCREEN COLOR", 0
+    helpmsg6:
+        .bytes "NEW - CLEAR PROGRAM", 0
+    helpmsg7:
+        .bytes "LIST - LIST PROGRAM", 0
+    helpmsg8:
+        .bytes "RENUMBER - FIX LINES", 0
+    helpmsg9:
+        .bytes "RUN - RUN PROGRAM", 0
+    helpmsgA:
+        .bytes "SYS # - JUMP TO ADDR", 0
+    helpmsgB:
+        .bytes "REGS - SHOW REGS", 0
+    helpmsgC:
+        .bytes "DUMP # - SHOW MEM", 0
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+haltmsg:
+    PUSH AB
+    CALL @getcursor
+    CALL @carriage_return
+    CALL @line_feed
+    MOV AB, @haltmsg1
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+    POP AB
+    HALT
+    RET
+
+haltmsg1:
+    .bytes "HALTED", 0
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+fgmsg:
+    ; Parse the number after "FG " command
+    ; Line format: "FG #" where # is 0-15
+    ; XY points to start of line in video memory
+
+    PUSHA
+
+    ; Skip past "FG " (3 characters) to get to the number
+    MOV DP, XY
+    INC DP
+    INC DP
+    INC DP
+
+    ; Read the digit character
+    LDA [DP]
+
+    ; Convert ASCII to number
+    ; '0'-'9' = 48-57, 'A'-'F' = 65-70
+    CMP A, 48           ; Less than '0'?
+    JNC @fgmsg_error    ; If A < 48, error (carry not set means A < 48)
+    CMP A, 58           ; Greater than '9'?
+    JC @fgmsg_check_hex ; If A >= 58, check for hex
+
+    ; It's 0-9
+    SUB A, 48           ; Convert ASCII to value
+    JMP @fgmsg_set_color
+
+fgmsg_check_hex:
+    ; Check for A-F (65-70)
+    CMP A, 65           ; Less than 'A'?
+    JNC @fgmsg_error
+    CMP A, 71           ; Greater than 'F'?
+    JC @fgmsg_error
+
+    ; It's A-F
+    SUB A, 55           ; Convert ASCII to value (A=65 -> 10)
+
+fgmsg_set_color:
+    ; A now contains the color value (0-15)
+    ; Store it as the new foreground color
+    MOV DP, $F0F8       ; Default character color location
+    LDB [DP]            ; Read current color (BBBBFFFF)
+    AND B, $F0          ; Keep background, clear foreground
+    OR A, B             ; Combine new fg with old bg
+    STA [DP]            ; Save new default color
+
+    ; Print confirmation message
+    CALL @getcursor
+    CALL @carriage_return
+    CALL @line_feed
+    MOV AB, @fgmsg1
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+    CALL @carriage_return
+    CALL @line_feed
+
+    CALL @reset_screen_color
+
+    POPA
+    RET
+
+fgmsg_error:
+    CALL @getcursor
+    CALL @carriage_return
+    CALL @line_feed
+    MOV AB, @fgmsg_err
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+    CALL @carriage_return
+    CALL @line_feed
+    POPA
+    RET
+
+fgmsg1:
+    .bytes "FG CHANGED", 0
+fgmsg_err:
+    .bytes "?INVALID COLOR", 0
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+bgmsg:
+    ; Parse the number after "BG " command
+    ; Line format: "BG #" where # is 0-15
+    ; XY points to start of line in video memory
+
+    PUSHA
+
+    ; Skip past "BG " (3 characters) to get to the number
+    MOV DP, XY
+    INC DP
+    INC DP
+    INC DP
+
+    ; Read the digit character
+    LDA [DP]
+
+    ; Convert ASCII to number
+    CMP A, 48           ; Less than '0'?
+    JNC @bgmsg_error
+    CMP A, 58           ; Greater than '9'?
+    JC @bgmsg_check_hex
+
+    ; It's 0-9
+    SUB A, 48           ; Convert ASCII to value
+    JMP @bgmsg_set_color
+
+bgmsg_check_hex:
+    ; Check for A-F (65-70)
+    CMP A, 65           ; Less than 'A'?
+    JNC @bgmsg_error
+    CMP A, 71           ; Greater than 'F'?
+    JC @bgmsg_error
+
+    ; It's A-F
+    SUB A, 55           ; Convert ASCII to value (A=65 -> 10)
+
+bgmsg_set_color:
+    ; A now contains the color value (0-15)
+    ; Shift it to high nibble for background
+    PUSH A
+    PUSH A
+    PUSH A
+    PUSH A
+    POP B
+    POP B
+    POP B
+    POP B
+    ; Now shift A left 4 bits using PAB
+    LDA 0
+    PAB                 ; Pack B into high nibble of A
+    PUSH A
+    POP B               ; B now has color in high nibble
+
+    ; Combine with existing foreground
+    MOV DP, $F0F8       ; Default character color location
+    LDA [DP]            ; Read current color (BBBBFFFF)
+    AND A, $0F          ; Keep foreground, clear background
+    OR A, B             ; Combine with new bg
+    STA [DP]            ; Save new default color
+
+    ; Print confirmation message
+    CALL @getcursor
+    CALL @carriage_return
+    CALL @line_feed
+    MOV AB, @bgmsg1
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+    CALL @carriage_return
+    CALL @line_feed
+
+    CALL @reset_screen_color
+
+    POPA
+    RET
+
+bgmsg_error:
+    CALL @getcursor
+    CALL @carriage_return
+    CALL @line_feed
+    MOV AB, @bgmsg_err
+    CALL @write_string
+    CALL @carriage_return
+    CALL @line_feed
+    CALL @carriage_return
+    CALL @line_feed
+
+    POPA
+    RET
+
+bgmsg1:
+    .bytes "BG CHANGED", 0
+bgmsg_err:
+    .bytes "?INVALID COLOR", 0
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+reset_screen_color:
+    ; Routine: Set all screen colors to default color at $F8
+    ;   Also updates $F9 to be the inverse of $F8
+
+    PUSHA
+
+    ; First, update $F9 to be inverse of $F8
+    CALL @invert_saved_cursor
+
+    ; Get default color from $F8
+    MOV DP, $F0F8
+    LDA [DP]            ; A = default color
+
+    ; Fill entire color map (506 bytes) with this color
+    ; Color map: $F300-$F4F9 (22 cols × 23 rows)
+    MOV DP, $F300
+    LDI 23              ; 23 rows
+
+fill_row_loop:
+    PUSH I              ; Save row counter
+
+    LDJ 22              ; 22 columns per row
+fill_col_loop:
+    STA [DP]            ; Write color
+    INC DP
+    DEC J
+    CMP J, 0
+    JNZ @fill_col_loop
+
+    POP I               ; Restore row counter
+    DEC I
+    CMP I, 0
+    JNZ @fill_row_loop
+
+    POPA
+    RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+byte2string:
+    ; Routine: Convert byte to decimal string
+    ;   IN:     A: byte value (0-255)
+    ;           XY: destination address for string
+    ;   OUT:    String at XY (null-terminated)
+    ;   NOTE:   Result is "0" to "255" (max 4 bytes)
+
+    PUSHA
+
+    MOV DP, XY          ; DP = destination
+    PUSH A              ; Save original value on stack
+
+    ; Extract hundreds digit
+    LDB 100
+    DIV                 ; A = hundreds, B = remainder
+    PUSH A              ; Save hundreds
+    PUSH B              ; Save remainder
+
+    ; Extract tens and ones from remainder
+    POP A               ; A = remainder (0-99)
+    LDB 10
+    DIV                 ; A = tens, B = ones
+    PUSH A              ; Save tens
+    PUSH B              ; Save ones
+
+    ; Stack now has: [original][hundreds][tens][ones]
+
+    ; Check if we need to write hundreds
+    POP T               ; T = ones
+    POP K               ; K = tens
+    POP I               ; I = hundreds
+
+    ; Write hundreds if non-zero
+    CMP I, 0
+    JZ @b2s_check_tens
+
+    PUSH I
+    POP A
+    ADD A, 48           ; Convert to ASCII
+    STA [DP]
+    INC DP
+
+b2s_check_tens:
+    ; Write tens if (hundreds != 0) OR (tens != 0)
+    CMP I, 0
+    JNZ @b2s_write_tens ; If hundreds written, always write tens
+
+    CMP K, 0
+    JZ @b2s_write_ones  ; Skip tens if no hundreds and tens is 0
+
+b2s_write_tens:
+    PUSH K
+    POP A
+    ADD A, 48           ; Convert to ASCII
+    STA [DP]
+    INC DP
+
+b2s_write_ones:
+    PUSH T
+    POP A
+    ADD A, 48           ; Convert to ASCII
+    STA [DP]
+    INC DP
+
+    ; Null terminator
+    LDA 0
+    STA [DP]
+
+    POP A               ; Clean stack (original value)
+    POPA
+    RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+            ; Kernal helper functions!
+            ; i. String operations in alphabetical order.
+            ; ii. Terminal operations in alphabetical order.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; string operations
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+strlen:
+    ; Routine: Calculate string length
+    ;   IN:     MP: pointer to null-terminated string
+    ;   OUT:    AB: length of string
+
+    XSR XY
+    XSR KT
+    XSR MP
+    XSR DP
+
+    LDA 0               ; Search for null byte
+    MOV DP, MP          ; Start searching at MP
+    MOV KT, $1000       ; Max length
+
+    SCAN                ; Find null byte
+                        ; After SCAN: DP points to null (or end)
+                        ;             XY = offset from original DP
+
+    MOV AB, XY          ; Length = offset where null found
+
+    XSR DP
+    XSR MP
+    XSR KT
+    XSR XY
+
+    RET
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Terminal operations
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+cursor_blink:
+    ; Routine: Toggle cursor
+
+    PUSHA
+
+    ; Read jiffy timer byte at $F0F5 (second byte, contains bits 8-15)
+    MOV DP, $F0F5
+    LDA [DP]
+
+    ; Test bit 9 (the second bit of this byte)
+    ; Bit 9 = 0x0200 = 512ms period = ~256ms toggle
+    AND A, $02          ; Mask bit 1 (0000 0010)
+    CMP A, 0
+    JZ @cursor_should_be_off
+
+cursor_should_be_on:
+    CALL @cursor_on
+    JMP @cursor_blink_done
+
+cursor_should_be_off:
+    CALL @cursor_off
+
+cursor_blink_done:
+    POPA
+    RET
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+cursor_toggle:
+    ; Routine: Toggle cursor at current cursor position
+    ;   Checks state at $FA and calls cursor_on or cursor_off accordingly
+
+    PUSHA
+
+    ; Check current state at $FA
+    MOV DP, $F0FA
+    LDA [DP]
+    CMP A, 0
+    JZ @do_cursor_on
+
+    ; State is 1 (on), turn it off
+    CALL @cursor_off
+    JMP @cursor_toggle_done
+
+do_cursor_on:
+    ; State is 0 (off), turn it on
+    CALL @cursor_on
+
+cursor_toggle_done:
+    POPA
+    RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+cursor_on:
+    ; Routine: Turn cursor on at position X,Y using cursor color
+    ;   IN: X = column, Y = row (from getcursor)
+    ;   If already on (state=$FA is 1), does nothing
+    ;   Otherwise: saves original color to $F8, writes cursor color from $F9
+
+    PUSHA
+
+    ; Check current state at $FA
+    MOV DP, $F0FA
+    LDA [DP]
+    CMP A, 1
+    JZ @cursor_on_done      ; Already on, exit
+
+    ; Get current cursor position
+    CALL @getcursor         ; X = column, Y = row
+
+    ; Calculate color map address: Y * 22 + X + $F300
+    PUSH X                  ; Save X
+    PUSH Y                  ; Save Y
+    POP A                   ; A = Y
+    LDB 22
+    MUL                     ; AB = Y * 22
+    POP X
+    LDY 0
+    ADDX                    ; AB = Y*22 + X
+    MOV XY, $F300
+    ADDX                    ; AB = colormap address
+    MOV DP, AB
+
+    ; Read current color and save it
+    LDA [DP]
+    MOV XY, $F0F8
+    STA [XY]                ; Save original color to $F8
+
+    ; Load cursor color from $F9
+    MOV XY, $F0F9
+    LDA [XY]
+
+    ; Write cursor color to screen
+    STA [DP]
+
+    ; Set state to 1 (on)
+    LDA 1
+    MOV DP, $F0FA
+    STA [DP]
+
+cursor_on_done:
+    POPA
+    RET
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+cursor_off:
+    ; Routine: Turn cursor off at position X,Y
+    ;   IN: X = column, Y = row (from getcursor)
+    ;   If already off (state=$FA is 0), does nothing
+    ;   Otherwise: restores color from $F8
+
+    PUSHA
+
+    ; Check current state at $FA
+    MOV DP, $F0FA
+    LDA [DP]
+    CMP A, 0
+    JZ @cursor_off_done     ; Already off, exit
+
+    ; Get current cursor position
+    CALL @getcursor         ; X = column, Y = row
+
+    ; Calculate color map address: Y * 22 + X + $F300
+    PUSH X                  ; Save X
+    PUSH Y                  ; Save Y
+    POP A                   ; A = Y
+    LDB 22
+    MUL                     ; AB = Y * 22
+    POP X
+    LDY 0
+    ADDX                    ; AB = Y*22 + X
+    MOV XY, $F300
+    ADDX                    ; AB = colormap address
+    MOV DP, AB
+
+    ; Restore original color from $F8
+    MOV XY, $F0F8
+    LDA [XY]                ; Get saved original color
+    STA [DP]                ; Restore it
+
+    ; Set state to 0 (off)
+    LDA 0
+    MOV DP, $F0FA
+    STA [DP]
+
+cursor_off_done:
+    POPA
+    RET
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+getkey:
+    ; Routine: Get next key from keyboard buffer
+    ;   IN:     none
+    ;   OUT:    A: character (0 if no key)
+    ;           B: number of keys that were in buffer before this call (0 = no key)
+    ;           K: keyboard flags at time of press
+    ;   NOTE:   X, Y preserved for cursor position
+
+    XSR IJ      ; Preserve IJ too (we use I below)
+    XSR MP
+    XSR DP
+    XDR T
+
+    ; Check buffer count at $F0FB
+    MOV DP, $F0FB
+    LDB [DP]            ; B = key count
+    CMP B, 0
+    JNZ @getkey_cont
+getkey_none:            ; label not used but included for clarity
+    LDA 0               ; No character
+    LDK 0               ; No flags
+getkey_done:
+    XSR DP
+    XSR MP
+    XSR IJ
+    XDR T
+    RET
+
+getkey_cont:
+    ; Get character from buffer at $F0A0
+    MOV DP, $F0A0
+    LDA [DP]            ; A = character
+    PUSH A              ; Save character
+
+    ; Get control flags from buffer at $F0A1
+    MOV DP, $F0A1
+    LDA [DP]            ; A = flags
+    PUSH A              ; Save flags temporarily
+
+    ; Decrement buffer count
+    MOV DP, $F0FB
+    LDB [DP]
+    DEC B
+    STB [DP]
+
+    ; Clear last byte of buffer (will be shifted off)
+    LDA 0
+    MOV DP, $F0AF
+    STA [DP]
+
+    ; Shift buffer left by 2 bytes (one pair)
+    MOV MP, $F0A2       ; Source: next pair
+    MOV DP, $F0A0       ; Dest: current position
+    MOV KT, 14          ; Shift 14 bytes (7 remaining pairs)
+    MEMCOPY
+
+    ; Restore return values
+    POP K               ; K = flags at time of press (see PUSH A above)
+    POP A               ; A = character
+
+    JMP @getkey_done
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Write_Char:
+; A = character to print (ASCII code)
+; X = column
+; Y = row
+;
+write_char:
+
+    PUSHA
+
+    PUSH A              ; Save character
+
+    ; Calculate address
+    PUSH Y
+    POP A
+    LDB 22
+    MUL
+    LDY 0
+    ADDX
+    MOV XY, $0100
+    ADDX
+    MOV XY, VP
+    ADDX
+    MOV DP, AB
+
+    ; Write character
+    POP A               ; Get character
+    STA [DP]            ; Write to bank
+
+    POPA                ; This restores MB automatically!
+    RET
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; write_string
+;;
+;;     Writes string at address AB to current cursor location.
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+write_string_at:
+    PUSHA
+    MOV MP, AB          ; MP = string pointer
+    JMP @print_loop
+
+write_string:
+    PUSHA
+
+    ; Save string pointer
+    MOV MP, AB          ; MP = string pointer
+
+    ; Get current cursor position
+    CALL @getcursor     ; X = column, Y = row
+
+print_loop:
+    LDA [MP]            ; Read from code bank
+    CMP A, 0
+    JZ @print_done
+
+    CALL @write_char    ; Write at X, Y
+
+    INC MP
+    INC X
+
+    ; Check if we need to wrap to next line
+    CMP X, 22           ; Max column is 21 (0-21)
+    JC @check_scroll    ; X >= 22, need to wrap
+
+    ; Continue on same line
+    JMP @print_loop
+
+check_scroll:
+    ; Wrap to next line
+    LDX 0               ; Reset to column 0
+    INC Y               ; Move to next row
+
+    ; Check if we're past the last line (row 22)
+    CMP Y, 23           ; If Y >= 23, we need to scroll
+    JC @do_scroll
+
+    ; Not past bottom, continue
+    JMP @print_loop
+
+do_scroll:
+    ; We're past the bottom, scroll up
+    CALL @line_feed
+
+    ; After line_feed, set cursor to row 22
+    LDY 22
+
+    JMP @print_loop
+
+print_done:
+    ; Update cursor position in memory
+    CALL @ctoxy
+
+    POPA
+    RET
+
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+input_string:
+    ; Read a line of input from keyboard
+    ; IN:  AB = buffer address (where to store string)
+    ;      X = max length
+    ; OUT: String at buffer, null-terminated
+    ;      AB = length of string entered
+
+    PUSHA
+
+    ; Save parameters
+    MOV [@input_buffer_addr], AB
+    PUSH X
+    POP A
+    MOV [@input_max_len], A
+    LDA 0
+    MOV [@input_current_len], A
+
+    ; Mark cursor position where input starts
+    CALL @getcursor
+    PUSH X
+    POP A
+    MOV [@input_start_x], A
+    PUSH Y
+    POP A
+    MOV [@input_start_y], A
+
+    ; Set input mode flag
+    LDA 1
+    MOV [@input_mode_active], A
+
+input_wait_loop:
+    ; Wait for input mode to complete
+    ; (main loop will handle keystrokes and set flag to 0 when done)
+    MOV DP, @input_mode_active
+    LDA [DP]
+    CMP A, 0
+    JNZ @input_wait_loop
+
+    ; Input complete, return length
+    MOV AB, [@input_current_len]
+
+    POPA
+    RET
+
+; Storage
+input_mode_active:
+    .bytes 0
+input_buffer_addr:
+    .bytes 0, 0
+input_max_len:
+    .bytes 0
+input_current_len:
+    .bytes 0, 0
+input_start_x:
+    .bytes 0
+input_start_y:
+    .bytes 0
+
+; helper for input_string:
+copy_input_to_buffer:
+    ; Copy current line to input buffer
+    PUSHA
+
+    LDA 255
+    LDB 0
+    SETMB
+
+    ; Calculate source address (current line in screen memory)
+    MOV DP, @input_start_y
+    LDA [DP]
+    LDB 22
+    MUL
+    MOV XY, @input_start_x
+    LDA [XY]
+    PUSH A
+    POP X
+    LDY 0
+    ADDX
+    MOV XY, $F100
+    ADDX
+    MOV MP, AB          ; MP = source
+
+    ; Get destination
+    MOV DP, [@input_buffer_addr]
+
+    ; Get length to copy (min of max_len and actual chars on line)
+    CALL @getcursor
+    PUSH X
+    MOV XY, @input_start_x
+    LDA [XY]
+    POP B
+    SUB B, A            ; B = chars entered
+
+    MOV XY, @input_max_len
+    LDA [XY]
+    CMP A, B
+    JC @use_max
+    PUSH B
+    POP A
+use_max:
+    ; A = length to copy
+    PUSH A
+    POP K
+    LDT 0               ; KT = length
+
+    ; Copy the string
+    MEMCOPY
+
+    ; Add null terminator
+    LDA 0
+    STA [DP]
+
+    ; Store length
+    PUSH K
+    POP A
+    PUSH T
+    POP B
+    MOV [@input_current_len], AB
+
+    POPA
+    RET
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+input_string2:
+    ; Read a line of input from keyboard
+    ; IN:  AB = buffer address (where to store string)
+    ;      X = max length
+    ; OUT: AB = length of string entered
+    ;      String at buffer, null-terminated
+
+    PUSHA
+
+    ; Save parameters
+    MOV [@input_buffer], AB
+    PUSH X
+    POP A
+    MOV [@input_maxlen], A
+    LDA 0
+    MOV [@input_len], A
+
+    ; Mark starting position
+    CALL @getcursor
+    PUSH X
+    POP A
+    MOV [@input_start_x], A
+    PUSH Y
+    POP A
+    MOV [@input_start_y], A
+
+input_loop:
+    ; Turn on cursor
+    CALL @cursor_on
+
+    ; Check keyboard buffer
+    LDA 255
+    LDB 0
+    SETMB
+
+    MOV DP, $F0FB
+    LDB [DP]
+    CMP B, 0
+    JZ @input_loop      ; No key, keep waiting
+
+    ; Get character
+    MOV DP, $F0A0
+    LDA [DP]
+    PUSH A              ; Save character
+
+    ; Decrement buffer count
+    MOV DP, $F0FB
+    LDB [DP]
+    DEC B
+    STB [DP]
+
+    ; Shift keyboard buffer left
+    MOV MP, $F0A2
+    MOV DP, $F0A0
+    MOV KT, 14
+    MEMCOPY
+
+    ; Clear last bytes
+    LDA 0
+    MOV DP, $F0AE
+    STA [DP]
+    INC DP
+    STA [DP]
+
+    ; Get character back
+    POP A
+
+    ; Check for ENTER (13)
+    CMP A, 13
+    JZ @input_done
+
+    ; Check for BACKSPACE (8)
+    CMP A, 8
+    JZ @input_backspace
+
+    ; Check for printable (32-126)
+    CMP A, 32
+    JNC @input_loop     ; < 32, ignore
+    CMP A, 127
+    JC @input_loop      ; >= 127, ignore
+
+    ; Check if buffer full
+    MOV DP, @input_len
+    LDB [DP]
+    MOV DP, @input_maxlen
+    LDA [DP]
+    CMP B, A
+    JNC @input_loop     ; Buffer full, ignore
+
+    ; Add character to buffer
+    PUSH A              ; Save maxlen
+
+    ; Get buffer position
+    MOV AB, [@input_buffer]
+    MOV DP, @input_len
+    LDA [DP]
+    PUSH A
+    POP X
+    LDY 0
+    ADDX
+    MOV DP, AB
+
+    ; Restore character and write to buffer
+    POP A               ; Discard maxlen
+    POP A               ; Get character back (was pushed before printable check)
+    PUSH A              ; Save again for screen write
+
+    ; Set MB to 0 (buffer bank)
+    LDA 0
+    LDB 0
+    SETMB
+
+    POP A
+    PUSH A
+    STA [DP]
+
+    ; Increment length
+    MOV DP, @input_len
+    LDA [DP]
+    INC A
+    STA [DP]
+
+    ; Write to screen
+    CALL @getcursor
+    POP A
+    CALL @cursor_off
+    CALL @write_char
+    CALL @cursor_off
+    INC X
+    CALL @ctoxy
+
+    JMP @input_loop
+
+input_backspace:
+    ; Check if at start
+    MOV DP, @input_len
+    LDA [DP]
+    CMP A, 0
+    JZ @input_loop      ; Nothing to delete
+
+    ; Decrement length
+    DEC A
+    STA [DP]
+
+    ; Move cursor left
+    CALL @cursor_off
+    CALL @getcursor
+    DEC X
+    CALL @ctoxy
+
+    ; Write space to erase character
+    LDA 32
+    CALL @write_char
+
+    JMP @input_loop
+
+input_done:
+    CALL @cursor_off
+
+    ; Add null terminator to buffer
+    MOV AB, [@input_buffer]
+    MOV DP, @input_len
+    LDA [DP]
+    PUSH A
+    POP X
+    LDY 0
+    ADDX
+    MOV DP, AB
+
+    LDA 0
+    LDB 0
+    SETMB
+
+    LDA 0
+    STA [DP]
+
+    ; Move to next line
+    CALL @carriage_return
+    CALL @line_feed
+
+    ; Return length in AB
+    MOV AB, [@input_len]
+
+    POPA
+    RET
+
+; Storage
+input_buffer:
+    .bytes 0, 0
+input_maxlen:
+    .bytes 0
+input_len:
+    .bytes 0
+input_start_x:
+    .bytes 0
+input_start_y:
+    .bytes 0
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ctoxy:
+     XDR A
+     LDA #21
+     CMP A, X
+     JC @ctoxy_check_y
+     LDX #0
+     INC Y
+
+ ctoxy_check_y:
+     LDA #22
+     CMP A, Y
+     JC @ctoxy_done
+     LDY #22
+
+ ctoxy_done:
+    ; Write clamped values
+    MOV DP, $F0FC
+    PUSH X
+    POP A
+    STA [DP]
+
+    MOV DP, $F0FD
+    PUSH Y
+    POP A
+    STA [DP]
+    XDR A
+    RET
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+carriage_return:
+    CALL @getcursor
+    LDX 0
+    CALL @ctoxy
+    RET
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+linefeed_push:
+    ; Scrolls screen up by one row
+    ; - Copies rows 1-22 to rows 0-21
+    ; - Clears row 22 (bottom) with spaces
+
+    PUSHA
+
+    ; === Scroll character map ===
+    ; Copy $F116-$F2F9 to $F100-$F2E3 (22 rows × 22 cols = 484 bytes)
+    MOV MP, $F116       ; Source: row 1 (skip first row)
+    MOV DP, $F100       ; Dest: row 0 (character map start)
+    MOV KT, 484         ; 22 rows × 22 cols
+    MEMCOPY
+
+    ; === Scroll color map ===
+    ; Copy $F316-$F4F9 to $F300-$F4E3 (22 rows × 22 cols = 484 bytes)
+    MOV MP, $F316       ; Source: row 1 of color map
+    MOV DP, $F300       ; Dest: row 0 of color map
+    MOV KT, 484
+    MEMCOPY
+
+    ; === Clear bottom row (row 22) with spaces ===
+    ; Character map: $F2E4-$F2F9 (22 bytes)
+    MOV DP, $F2E4       ; Start of row 22 in char map
+    LDA #32             ; Space character
+    LDI 22              ; 22 columns
+
+clear_bottom_char:
+    STA [DP]
+    INC DP
+    DEC I
+    CMP I, 0
+    JNZ @clear_bottom_char
+
+    ; === Clear bottom row colors ===
+    ; Color map: $F4E4-$F4F9 (22 bytes)
+    MOV DP, $F4E4       ; Start of row 22 in color map
+    LDA [$F0F8]         ; Default color (your current bg:fg)
+    LDI 22
+
+clear_bottom_color:
+    STA [DP]
+    INC DP
+    DEC I
+    CMP I, 0
+    JNZ @clear_bottom_color
+
+    POPA
+    RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+line_feed:
+    ; Routine: Move to next line, scrolling if necessary
+    ;   If on last line (row 22): scroll up (linefeed)
+    ;   Otherwise: move down (arr_down)
+
+    PUSHA
+
+    ; Get current Y position
+    MOV DP, $F0FD
+    LDA [DP]            ; A = current row
+
+    ; Check if on last line (row 22)
+    CMP A, 22
+    JZ @do_scroll
+
+    ; Not on last line - just move down
+    CALL @arr_down
+    POPA
+    RET
+
+do_scroll:
+    ; On last line - scroll
+    CALL @linefeed_push
+    POPA
+    RET
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+getcursor:
+    ; Returns X=column from $F0FC, Y=row from $F0FD
+    MOV DP, $F0FC
+    LDA [DP]
+    PUSH A
+    POP X               ; X = column from $FC
+
+    MOV DP, $F0FD
+    LDA [DP]
+    PUSH A
+    POP Y               ; Y = row from $FD
+    RET
+
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+arr_left:
+    ; Move cursor left (decrement X)
+    ; If at left edge, wrap to previous row, rightmost column
+    PUSHA
+
+    ; Get current cursor position
+    CALL @getcursor     ; X=col, Y=row
+
+    ; Check if at left edge (X == 0)
+    PUSH X
+    POP A
+    CMP A, 0
+    JNZ @left_decrement
+
+    ; At left edge - check if on first row
+    PUSH Y
+    POP A
+    CMP A, 0
+    JZ @arr_left_done   ; Already at top-left, can't go further
+
+    ; Move to previous row, rightmost column
+    DEC Y
+
+    ; Read max columns from $F0F1
+    MOV DP, $F0F1
+    LDA [DP]
+    DEC A               ; A = maxcols - 1
+    PUSH A
+    POP X               ; X = maxcols - 1
+
+    CALL @ctoxy
+    JMP @arr_left_done
+
+left_decrement:
+    ; Just decrement X
+    DEC X
+    CALL @ctoxy
+
+arr_left_done:
+    POPA
+    RET
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+do_backspace:
+    ; 1. move character to the left BUT not beyond X=0 (no wraparound).
+    ; 2. Write a 'SPACE' (ASCII 32) to the current cursor location.
+
+    PUSHA
+
+    ; Read current cursor X position from $F0FC
+    MOV DP, $F0FC
+    LDA [DP]
+
+    ; Check if X = 0 (at left edge)
+    CMP A, 0
+    JZ @backspace_done  ; Can't go left, do nothing
+
+    ; Decrement X
+    DEC A
+    STA [DP]            ; Write new X back to $F0FC
+
+    ; Now write SPACE at new cursor position
+    ; Read cursor X and Y
+    MOV DP, $F0FC
+    LDA [DP]
+    PUSH A              ; Save X
+    MOV DP, $F0FD
+    LDA [DP]
+    PUSH A              ; Save Y
+
+    ; Calculate screen position: Y * 22 + X
+    POP A               ; A = Y
+    LDB 22
+    MUL                 ; AB = Y * 22
+    POP X               ; X = column
+    LDY 0
+    ADDX                ; AB = Y*22 + X
+
+    ; Add character map base ($F100)
+    MOV XY, $0100
+    ADDX
+    MOV XY, $F000       ; VP
+    ADDX
+    MOV DP, AB
+
+    ; Write SPACE (ASCII 32)
+    LDA 32
+    STA [DP]
+
+    ; pull right side of line to the left
+    CALL @pull_line
+
+backspace_done:
+    POPA
+    RET
+
+///////////////////////////////////////////////////////////////////////////////
+
+pull_line:
+    ; Pulls all characters to the right of cursor one position left
+    ; Fills the rightmost position with a SPACE
+    ; IN: Cursor at $F0FC (X), $F0FD (Y)
+    ; Modifies: characters on current row
+
+    PUSHA
+
+    ; Read cursor position
+    MOV DP, $F0FC
+    LDA [DP]            ; A = X (column)
+    PUSH A              ; Save X
+    MOV DP, $F0FD
+    LDA [DP]            ; A = Y (row)
+    PUSH A              ; Save Y
+
+    ; Calculate start position: Y * 22 + X
+    POP A               ; A = Y
+    LDB 22
+    MUL                 ; AB = Y * 22
+    POP X               ; X = column
+    PUSH X              ; Save X for count calculation
+    LDY 0
+    ADDX                ; AB = Y*22 + X
+
+    ; Add character map base to get source address
+    MOV XY, $F101       ; VP + chars on screen + 'next char'.
+    ADDX
+    MOV MP, AB          ; Source: next character
+
+    ; Destination = cursor position (overwrite current)
+    DEC AB
+    MOV DP, AB          ; Destination: current position
+
+    ; Count = 22 - X (characters from cursor to end of line)
+    POP B
+    LDA 22
+    SUB                 ; A = 22 - X
+    DEC A               ; -1 because we're copying from X+1
+    PUSH A
+    POP K
+    LDT 0
+    ; KT = count
+
+    ; Copy characters left
+    MEMCOPY
+
+    ; Now write SPACE at the last position on the line
+    ; Last position = Y * 22 + 21
+    MOV DP, $F0FD
+    LDA [DP]            ; A = Y
+    LDB 22
+    MUL                 ; AB = Y * 22
+    MOV XY, 21          ; Last column
+    ADDX                ; AB = Y*22 + 21
+
+    ; Add character map base
+    MOV XY, $F100       ; VP + chars
+    ADDX
+    MOV DP, AB
+
+    ; Write SPACE
+    LDA 32
+    STA [DP]
+
+    POPA
+    RET
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+arr_right:
+    ; Move cursor right (increment X)
+    PUSHA
+
+    ; Get current cursor position
+    CALL @getcursor     ; X=col, Y=row
+    PUSH X
+
+    ; Read max columns from $F0F1
+    MOV DP, $F0F1
+    LDA [DP]            ; A = maxcols
+
+    ; Check if at right edge (X >= maxcols - 1)
+    DEC A   ; a = maxcols -1
+    POP B   ; b = current column
+
+    CMP A, B
+    JNC @move_next_row  ; At right edge (A >= B)
+
+    ; Increment X and set new cursor position
+    INC X
+    CALL @ctoxy
+
+arr_right_done:
+    POPA
+    RET
+
+move_next_row:
+    LDX 0               ; Column 0
+    INC Y               ; Next row
+    CALL @ctoxy         ; ctoxy will handle bounds
+    JMP @arr_right_done
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+arr_up:
+    ; Move cursor up (decrement Y)
+    ; Stops at top edge
+    PUSHA
+
+    ; Get current cursor position
+    CALL @getcursor     ; X=col, Y=row
+
+    ; Check if already at top (Y == 0)
+    PUSH Y
+    POP A
+    CMP A, 0
+    JZ @arr_up_done     ; Already at row 0, don't move
+
+    ; Decrement Y
+    DEC Y
+    CALL @ctoxy
+
+arr_up_done:
+    POPA
+    RET
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+arr_down:
+    ; Move cursor down (increment Y)
+    ; Stops at bottom edge
+    PUSHA
+
+    ; Get current cursor position
+    CALL @getcursor     ; X=col, Y=row
+
+    ; Read max rows from $F0F1
+    MOV DP, $F0F1
+    LDA [DP]            ; A = maxrows
+    DEC A       ; dec by 1 because if we're ON the last row, it's a fail.
+
+    ; Check if at bottom edge (Y >= maxrows - 1)
+    CMP A, Y
+    JNC @arr_down_done  ; Already at bottom edge
+
+    ; Increment Y
+    INC Y
+    CALL @ctoxy
+
+arr_down_done:
+    POPA
+    RET
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Parse a line/send stuff to Javscript.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+parse_line:
+    ; Routine: Parse and execute command line
+    ;   Called when ENTER is pressed
+    ;   Line is at cursor row in character map
+    ;   Sets up AB with line address and calls INT 03h for JS processing
+
+    PUSHA
+
+    ; Get cursor Y position (current row)
+    MOV DP, $F0FD
+    LDA [DP]            ; A = row
+
+    ; Calculate line start address: Y * 22 + $F100
+    LDB 22
+    MUL                 ; AB = Y * 22
+    MOV XY, $F100
+    ADDX                ; AB = line address in video bank
+    MOV XY, AB          ; Save line address in XY
+
+    ; Check if line starts with a digit (0-9)
+    LDA [XY]            ; Get first character
+    CMP A, 48           ; '0'
+    JC @check_commands
+    CMP A, 57           ; '9'
+    JNC @check_commands
+
+    ; It's a number - pass to JS for line entry
+    MOV AB, XY          ; AB = line address
+    INT 03h
+    JMP @parse_done
+
+check_commands:
+    ; Check for "HELP"
+    MOV DP, XY
+    LDA [DP]
+    CMP A, 72           ; 'H'
+    JNZ @check_fg
+    INC DP
+    LDA [DP]
+    CMP A, 69           ; 'E'
+    JNZ @check_fg
+    INC DP
+    LDA [DP]
+    CMP A, 76           ; 'L'
+    JNZ @check_fg
+    INC DP
+    LDA [DP]
+    CMP A, 80           ; 'P'
+    JNZ @check_fg
+
+    ; It's HELP
+    CALL @helpmsg
+    JMP @parse_done
+
+check_fg:
+    ; Check for "FG"
+    MOV DP, XY
+    LDA [DP]
+    CMP A, 70           ; 'F'
+    JNZ @check_bg
+    INC DP
+    LDA [DP]
+    CMP A, 71           ; 'G'
+    JNZ @check_bg
+
+    ; It's FG
+    CALL @fgmsg
+    JMP @parse_done
+
+check_bg:
+    ; Check for "BG"
+    MOV DP, XY
+    LDA [DP]
+    CMP A, 66           ; 'B'
+    JNZ @check_halt
+    INC DP
+    LDA [DP]
+    CMP A, 71           ; 'G'
+    JNZ @check_halt
+
+    ; It's BG
+    CALL @bgmsg
+    JMP @parse_done
+
+check_sys:
+    ; Check for "BG"
+    MOV DP, XY
+    LDA [DP]
+    CMP A, 66           ; 'B'
+    JNZ @check_halt
+    INC DP
+    LDA [DP]
+    CMP A, 71           ; 'G'
+    JNZ @check_halt
+
+    ; It's BG
+    CALL @bgmsg
+    JMP @parse_done
+
+check_halt:
+    ; Check for "HALT"
+    MOV DP, XY
+    LDA [DP]
+    CMP A, 72           ; 'H'
+    JNZ @error
+    INC DP
+    LDA [DP]
+    CMP A, 65           ; 'A'
+    JNZ @error
+    INC DP
+    LDA [DP]
+    CMP A, 76           ; 'L'
+    JNZ @error
+    INC DP
+    LDA [DP]
+    CMP A, 84           ; 'T'
+    JNZ @error
+
+    ; It's FG
+    CALL @haltmsg
+    JMP @parse_done
+
+error:
+    ; Errors? Send it to JS.
+    INT 0x03h
+    POPA
+    RET
+    ; NOT REACHED (old error code)
+    ; Print ?ERROR
+
+    CALL @carriage_return
+    CALL @line_feed
+
+    MOV AB, @error_msg
+    CALL @write_string
+
+    CALL @carriage_return
+    CALL @line_feed
+
+    CALL @carriage_return
+    CALL @line_feed
+
+
+parse_done:
+    POPA
+    RET
+
+error_msg:
+    .bytes "?ERROR", 0
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Random Numbers
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Random Number Generator using 16-bit Galois LFSR
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+rnd_seed:
+    .bytes 0xAC, 0xE1    ; 16-bit seed (initialized to non-zero)
+
+rnd_in:
+    ; Mix entropy into the seed
+    ; IN: A = entropy byte (keypress, timer, etc.)
+    PUSHA
+
+    MOV DP, @rnd_seed
+    LDB [DP]
+    XOR A, B             ; XOR with low byte
+    STA [DP]
+
+    INC DP
+    LDB [DP]
+    XOR A, B             ; XOR with high byte
+    STA [DP]
+
+    POPA
+    RET
+
+rnd_byte:
+    ; Generate random byte using Galois LFSR
+    ; OUT: A = random byte
+    ; Uses polynomial: x^16 + x^14 + x^13 + x^11 + 1 (0xB400)
+
+    PUSHA
+
+    ; Load seed into AB
+    MOV DP, @rnd_seed
+    LDA [DP]             ; A = low byte
+    INC DP
+    LDB [DP]             ; B = high byte
+
+    ; Shift right, capture LSB in carry
+    PUSH A
+    POP T                ; Save low byte
+    AND T, $01           ; T = LSB (will determine if we XOR)
+
+    ; Shift AB right by 1
+    SHR B                ; Shift high byte
+    ROR A                ; Rotate low byte (brings in carry from B)
+
+    ; If LSB was 1, XOR with tap mask $B400
+    CMP T, 0
+    JZ @rnd_no_xor
+
+    ; XOR with tap polynomial
+    PUSH A
+    POP X
+    PUSH B
+    POP Y
+
+    MOV AB, $B400
+    XORX                 ; AB = AB XOR XY
+
+rnd_no_xor:
+    ; Save new seed
+    MOV DP, @rnd_seed
+    STA [DP]
+    INC DP
+    PUSH B
+    POP A
+    STA [DP]
+
+    ; Return low byte as random value
+    MOV DP, @rnd_seed
+    LDA [DP]
+
+    POPA
+    RET
+
+colordore:
+        .bytes $00,$00,$00      ; 0: Black
+        .bytes $FF,$FF,$FF      ; 1: White
+        .bytes $81,$33,$38      ; 2: Red
+        .bytes $75,$CE,$C8      ; 3: Cyan
+        .bytes $8E,$3C,$97      ; 4: Purple
+        .bytes $56,$AC,$4D      ; 5: Green
+        .bytes $2E,$2C,$9B      ; 6: Blue
+        .bytes $ED,$F1,$71      ; 7: Yellow
+        .bytes $8E,$50,$29      ; 8: Orange
+        .bytes $55,$38,$00      ; 9: Brown
+        .bytes $C4,$6C,$71      ; 10: Light Red
+        .bytes $4A,$4A,$4A      ; 11: Dark Gray
+        .bytes $7B,$7B,$7B      ; 12: Medium Gray
+        .bytes $A9,$FF,$9F      ; 13: Light Green
+        .bytes $70,$6D,$EB      ; 14: Light Blue
+        .bytes $B2,$B2,$B2      ; 15: Light Gray
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; 8x8 Character Set
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+.address $F500
+petscii_font:                   ; PETSCII on ASCII.
+    // 0x00-0x1F: Control characters (empty for now)
+    .bytes 0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07 // 0x00
+    .bytes 0x08,0x09,0x0A,0x0B,0x0C,0x0D,0x0E,0x0F // 0x01
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x02
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x03
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x04
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x05
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x06
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x07
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x08
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x09
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x0A
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x0B
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x0C
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x0D
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x0E
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x0F
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x10
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x11
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x12
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x13
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x14
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x15
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x16
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x17
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x18
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x19
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x1A
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x1B
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x1C
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x1D
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x1E
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x1F
+
+    // 0x20-0x3F: Space, punctuation, numbers
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x20: Space
+    .bytes 0x18,0x3C,0x3C,0x18,0x18,0x00,0x18,0x00 // 0x21: !
+    .bytes 0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00 // 0x22: "
+    .bytes 0x66,0x66,0xFF,0x66,0xFF,0x66,0x66,0x00 // 0x23: #
+    .bytes 0x18,0x3E,0x60,0x3C,0x06,0x7C,0x18,0x00 // 0x24: $
+    .bytes 0x62,0x66,0x0C,0x18,0x30,0x66,0x46,0x00 // 0x25: %
+    .bytes 0x3C,0x66,0x3C,0x38,0x67,0x66,0x3F,0x00 // 0x26: &
+    .bytes 0x06,0x0C,0x18,0x00,0x00,0x00,0x00,0x00 // 0x27: '
+    .bytes 0x0C,0x18,0x30,0x30,0x30,0x18,0x0C,0x00 // 0x28: (
+    .bytes 0x30,0x18,0x0C,0x0C,0x0C,0x18,0x30,0x00 // 0x29: )
+    .bytes 0x00,0x66,0x3C,0xFF,0x3C,0x66,0x00,0x00 // 0x2A: *
+    .bytes 0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00 // 0x2B: +
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x30 // 0x2C: ,
+    .bytes 0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00 // 0x2D: -
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00 // 0x2E: .
+    .bytes 0x00,0x03,0x06,0x0C,0x18,0x30,0x60,0x00 // 0x2F: /
+
+    .bytes 0x3C,0x66,0x6E,0x76,0x66,0x66,0x3C,0x00 // 0x30: 0
+    .bytes 0x18,0x18,0x38,0x18,0x18,0x18,0x7E,0x00 // 0x31: 1
+    .bytes 0x3C,0x66,0x06,0x0C,0x30,0x60,0x7E,0x00 // 0x32: 2
+    .bytes 0x3C,0x66,0x06,0x1C,0x06,0x66,0x3C,0x00 // 0x33: 3
+    .bytes 0x06,0x0E,0x1E,0x66,0x7F,0x06,0x06,0x00 // 0x34: 4
+    .bytes 0x7E,0x60,0x7C,0x06,0x06,0x66,0x3C,0x00 // 0x35: 5
+    .bytes 0x3C,0x66,0x60,0x7C,0x66,0x66,0x3C,0x00 // 0x36: 6
+    .bytes 0x7E,0x66,0x0C,0x18,0x18,0x18,0x18,0x00 // 0x37: 7
+    .bytes 0x3C,0x66,0x66,0x3C,0x66,0x66,0x3C,0x00 // 0x38: 8
+    .bytes 0x3C,0x66,0x66,0x3E,0x06,0x66,0x3C,0x00 // 0x39: 9
+    .bytes 0x00,0x00,0x18,0x00,0x00,0x18,0x00,0x00 // 0x3A: :
+    .bytes 0x00,0x00,0x18,0x00,0x00,0x18,0x18,0x30 // 0x3B: ;
+    .bytes 0x0E,0x18,0x30,0x60,0x30,0x18,0x0E,0x00 // 0x3C:
+    .bytes 0x00,0x00,0x7E,0x00,0x7E,0x00,0x00,0x00 // 0x3D: =
+    .bytes 0x70,0x18,0x0C,0x06,0x0C,0x18,0x70,0x00 // 0x3E: >
+    .bytes 0x3C,0x66,0x06,0x0C,0x18,0x00,0x18,0x00 // 0x3F: ?
+
+    // 0x40-0x5F: @, uppercase A-Z, brackets
+    .bytes 0x3C,0x66,0x6E,0x6E,0x60,0x62,0x3C,0x00 // 0x40: @
+    .bytes 0x18,0x3C,0x66,0x7E,0x66,0x66,0x66,0x00 // 0x41: A
+    .bytes 0x7C,0x66,0x66,0x7C,0x66,0x66,0x7C,0x00 // 0x42: B
+    .bytes 0x3C,0x66,0x60,0x60,0x60,0x66,0x3C,0x00 // 0x43: C
+    .bytes 0x78,0x6C,0x66,0x66,0x66,0x6C,0x78,0x00 // 0x44: D
+    .bytes 0x7E,0x60,0x60,0x78,0x60,0x60,0x7E,0x00 // 0x45: E
+    .bytes 0x7E,0x60,0x60,0x78,0x60,0x60,0x60,0x00 // 0x46: F
+    .bytes 0x3C,0x66,0x60,0x6E,0x66,0x66,0x3C,0x00 // 0x47: G
+    .bytes 0x66,0x66,0x66,0x7E,0x66,0x66,0x66,0x00 // 0x48: H
+    .bytes 0x3C,0x18,0x18,0x18,0x18,0x18,0x3C,0x00 // 0x49: I
+    .bytes 0x1E,0x0C,0x0C,0x0C,0x0C,0x6C,0x38,0x00 // 0x4A: J
+    .bytes 0x66,0x6C,0x78,0x70,0x78,0x6C,0x66,0x00 // 0x4B: K
+    .bytes 0x60,0x60,0x60,0x60,0x60,0x60,0x7E,0x00 // 0x4C: L
+    .bytes 0x63,0x77,0x7F,0x6B,0x63,0x63,0x63,0x00 // 0x4D: M
+    .bytes 0x66,0x76,0x7E,0x7E,0x6E,0x66,0x66,0x00 // 0x4E: N
+    .bytes 0x3C,0x66,0x66,0x66,0x66,0x66,0x3C,0x00 // 0x4F: O
+
+    .bytes 0x7C,0x66,0x66,0x7C,0x60,0x60,0x60,0x00 // 0x50: P
+    .bytes 0x3C,0x66,0x66,0x66,0x66,0x3C,0x0E,0x00 // 0x51: Q
+    .bytes 0x7C,0x66,0x66,0x7C,0x78,0x6C,0x66,0x00 // 0x52: R
+    .bytes 0x3C,0x66,0x60,0x3C,0x06,0x66,0x3C,0x00 // 0x53: S
+    .bytes 0x7E,0x18,0x18,0x18,0x18,0x18,0x18,0x00 // 0x54: T
+    .bytes 0x66,0x66,0x66,0x66,0x66,0x66,0x3C,0x00 // 0x55: U
+    .bytes 0x66,0x66,0x66,0x66,0x66,0x3C,0x18,0x00 // 0x56: V
+    .bytes 0x63,0x63,0x63,0x6B,0x7F,0x77,0x63,0x00 // 0x57: W
+    .bytes 0x66,0x66,0x3C,0x18,0x3C,0x66,0x66,0x00 // 0x58: X
+    .bytes 0x66,0x66,0x66,0x3C,0x18,0x18,0x18,0x00 // 0x59: Y
+    .bytes 0x7E,0x06,0x0C,0x18,0x30,0x60,0x7E,0x00 // 0x5A: Z
+    .bytes 0x3C,0x30,0x30,0x30,0x30,0x30,0x3C,0x00 // 0x5B: [
+    .bytes 0x0C,0x12,0x30,0x7C,0x30,0x62,0xFC,0x00 // 0x5C: backslash
+    .bytes 0x3C,0x0C,0x0C,0x0C,0x0C,0x0C,0x3C,0x00 // 0x5D: ]
+    .bytes 0x00,0x18,0x3C,0x7E,0x18,0x18,0x18,0x18 // 0x5E: ^
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF // 0x5F: _
+
+    // 0x60-0x7F: lowercase a-z + graphics
+    .bytes 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 // 0x60: `
+    .bytes 0x00,0x00,0x3C,0x06,0x3E,0x66,0x3E,0x00 // 0x61: a
+    .bytes 0x60,0x60,0x7C,0x66,0x66,0x66,0x7C,0x00 // 0x62: b
+    .bytes 0x00,0x00,0x3C,0x60,0x60,0x60,0x3C,0x00 // 0x63: c
+    .bytes 0x06,0x06,0x3E,0x66,0x66,0x66,0x3E,0x00 // 0x64: d
+    .bytes 0x00,0x00,0x3C,0x66,0x7E,0x60,0x3C,0x00 // 0x65: e
+    .bytes 0x0E,0x18,0x3E,0x18,0x18,0x18,0x18,0x00 // 0x66: f
+    .bytes 0x00,0x00,0x3E,0x66,0x66,0x3E,0x06,0x7C // 0x67: g
+    .bytes 0x60,0x60,0x7C,0x66,0x66,0x66,0x66,0x00 // 0x68: h
+    .bytes 0x18,0x00,0x38,0x18,0x18,0x18,0x3C,0x00 // 0x69: i
+    .bytes 0x06,0x00,0x06,0x06,0x06,0x06,0x66,0x3C // 0x6A: j
+    .bytes 0x60,0x60,0x6C,0x78,0x6C,0x66,0x66,0x00 // 0x6B: k
+    .bytes 0x38,0x18,0x18,0x18,0x18,0x18,0x3C,0x00 // 0x6C: l
+    .bytes 0x00,0x00,0x66,0x7F,0x7F,0x6B,0x63,0x00 // 0x6D: m
+    .bytes 0x00,0x00,0x7C,0x66,0x66,0x66,0x66,0x00 // 0x6E: n
+    .bytes 0x00,0x00,0x3C,0x66,0x66,0x66,0x3C,0x00 // 0x6F: o
+
+    .bytes 0x00,0x00,0x7C,0x66,0x66,0x7C,0x60,0x60 // 0x70: p
+    .bytes 0x00,0x00,0x3E,0x66,0x66,0x3E,0x06,0x06 // 0x71: q
+    .bytes 0x00,0x00,0x7C,0x66,0x60,0x60,0x60,0x00 // 0x72: r
+    .bytes 0x00,0x00,0x3E,0x60,0x3C,0x06,0x7C,0x00 // 0x73: s
+    .bytes 0x18,0x18,0x7E,0x18,0x18,0x18,0x0E,0x00 // 0x74: t
+    .bytes 0x00,0x00,0x66,0x66,0x66,0x66,0x3E,0x00 // 0x75: u
+    .bytes 0x00,0x00,0x66,0x66,0x66,0x3C,0x18,0x00 // 0x76: v
+    .bytes 0x00,0x00,0x63,0x6B,0x7F,0x3E,0x36,0x00 // 0x77: w
+    .bytes 0x00,0x00,0x66,0x3C,0x18,0x3C,0x66,0x00 // 0x78: x
+    .bytes 0x00,0x00,0x66,0x66,0x66,0x3E,0x0C,0x78 // 0x79: y
+    .bytes 0x00,0x00,0x7E,0x0C,0x18,0x30,0x7E,0x00 // 0x7A: z
+    .bytes 0x0E,0x18,0x18,0x70,0x18,0x18,0x0E,0x00 // 0x7B: {
+    .bytes 0x18,0x18,0x18,0x00,0x18,0x18,0x18,0x00 // 0x7C: |
+    .bytes 0x70,0x18,0x18,0x0E,0x18,0x18,0x70,0x00 // 0x7D: }
+    .bytes 0x00,0x00,0x76,0xDC,0x00,0x00,0x00,0x00 // 0x7E: ~
+    .bytes 0x00,0x10,0x38,0x6C,0xC6,0xC6,0xFE,0x00 // 0x7F: DEL (triangle)
+
+    // 0x80-0xFF: Extended characters (block graphics, etc.)
+    .bytes 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF // 0x80: Full block
+    .bytes 0xF0,0xF0,0xF0,0xF0,0xF0,0xF0,0xF0,0xF0 // 0x81: Right half
+    .bytes 0x0F,0x0F,0x0F,0x0F,0x0F,0x0F,0x0F,0x0F // 0x82: Left half
+    .bytes 0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00 // 0x83: Upper half
+    .bytes 0x00,0x00,0x00,0x00,0xFF,0xFF,0xFF,0xFF // 0x84: Lower half

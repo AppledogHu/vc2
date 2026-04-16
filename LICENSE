@@ -1,0 +1,35 @@
+SD-8510 CPU / VC-2 Computer System
+Copyright (C) 2025 Appledog Hu
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; version 2 of the License only.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along
+with this program; if not, write to the Free Software Foundation, Inc.,
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+------------------------------------------------------------
+SD-8510 Runtime Exception
+------------------------------------------------------------
+
+As an additional permission under Section 7 of the GNU General Public
+License version 2, programs written to execute on the SD-8510 CPU
+instruction set as part of the VC-2 system are not considered derivative
+works of this software and are not subject to the terms of the GNU
+General Public License. Authors of such programs may license them under
+terms of their choosing.
+
+This exception applies only to software that executes on the SD-8510 CPU
+and does not apply to software that implements, emulates, reimplements,
+or derives from the SD-8510 CPU, assembler, runtime system, or other
+components of this software.
+
+This exception does not grant permission to modify, distribute, or
+create derivative works of the SD-8510 CPU / VC-2 source code itself,
+except as permitted under the GNU General Public License version 2.

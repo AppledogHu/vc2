@@ -1,0 +1,22 @@
+# Default ignored files
+/shelf/
+/workspace.xml
+# Editor-based HTTP Client requests
+/httpRequests/
+# Datasource local storage ignored files
+/dataSources/
+/dataSources.local.xml
+
+# Ignore PhpStorm project files
+/.idea/deployment.xml
+/.idea/jnw.iml
+/.idea/modules.xml
+/.idea/php.xml
+/.idea/sshConfigs.xml
+/.idea/vcs.xml
+/.idea/webServers.xml
+/.idea/workspace.xml
+
+# Ignore root config files
+/.editorconfig
+
